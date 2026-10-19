@@ -1,10 +1,32 @@
 {
   "name": "smarter_api",
-  "version": "11.0.1",
-  "description": "",
+  "version": "11.0.2",
+  "description": "High-performance, resilient Node.js SDK wrapper for the Angel One SmartAPI trading platform featuring automated TOTP generation, connection pooling, and auto IP detection.",
   "main": "index.js",
-  "author": "",
+  "keywords": [
+    "angel-one",
+    "smartapi",
+    "algorithmic-trading",
+    "stock-market",
+    "nse",
+    "bse",
+    "totp",
+    "trading-api",
+    "finance",
+    "order-placement",
+    "portfolio-management",
+    "node-smartapi"
+  ],
+  "author": "Aayush Shah (https://github.com/shahaayush265)",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shahaayush265/smarter_api.git"
+  },
+  "homepage": "https://github.com/shahaayush265/smarter_api#readme",
+  "bugs": {
+    "url": "https://github.com/shahaayush265/smarter_api/issues"
+  },
   "dependencies": {
     "address": "^2.0.2",
     "axios": "^1.6.8",
