@@ -1,0 +1,28 @@
+name: Publish Package to npmjs
+
+on:
+  push:
+    branches:
+      - main # Change to 'master' if your default branch is master
+
+permissions:
+  contents: read
+  id-token: write # CRITICAL: Required for OIDC / Trusted Publishing without access tokens
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          registry-url: 'https://npmjs.org'
+
+      - name: Publish to npm
+        # Fast publish using GitHub OIDC and generating a verifiable chain of custody
+        run: npm publish --provenance --access public
+
