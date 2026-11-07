@@ -1,106 +1,139 @@
 const { TOTP } = require("totp-generator");
 const axios = require("axios");
-const http = require("http");
+const https = require("https");
+const { HttpsProxyAgent } = require("https-proxy-agent");
 
-const httpAgent = new http.Agent({ keepAlive: true });
+const defaultHttpsAgent = new https.Agent({
+  keepAlive: true,
+  minVersion: "TLSv1.2",
+  maxVersion: "TLSv1.3",
+});
 
 class SmarterApi {
-  constructor() {
-    this.publicIp = "";
+  constructor(proxyConfig = null) {
+    this.publicIp = "103.248.75.23"; // Sensible default fallback
     this.privateIp = "192.168.1.123"; // Initialize private IP
     this.macAddress = "fe80::0211:22ff:fe33:4455"; // Initialize MAC Address
     this.retryCount = 3;
-    this.fetchDetails();
+    this.proxyConfig = null;
+    this.httpsAgent = defaultHttpsAgent;
+
+    if (proxyConfig) {
+      this.setProxy(proxyConfig);
+    } else {
+      this.fetchDetails();
+    }
+  }
+
+  setProxy(proxyConfig) {
+    if (!proxyConfig) {
+      this.proxyConfig = null;
+      this.httpsAgent = defaultHttpsAgent;
+      return;
+    }
+
+    const { static_ip, proxy_username, proxy_password, proxy_port } = proxyConfig;
+    if (static_ip) {
+      this.publicIp = static_ip;
+      if (proxy_username && proxy_password && proxy_port) {
+        const proxyUrl = `http://${encodeURIComponent(proxy_username)}:${encodeURIComponent(proxy_password)}@${static_ip}:${proxy_port}`;
+        this.httpsAgent = new HttpsProxyAgent(proxyUrl, {
+          keepAlive: true,
+          minVersion: "TLSv1.2",
+          maxVersion: "TLSv1.3",
+        });
+        this.proxyConfig = proxyConfig;
+      }
+    }
   }
 
   async fetchDetails() {
     try {
-      const response = await axios.get("https://httpbin.org/ip", { httpAgent });
-      this.publicIp = response.data.origin;
+      const response = await axios.get("https://api.ipify.org?format=json", {
+        httpsAgent: this.httpsAgent,
+        timeout: 3000,
+      });
+      if (response?.data?.ip) {
+        this.publicIp = response.data.ip;
+      }
     } catch (error) {
-      console.error(`Error fetching details: ${error.message}`);
+      // Fallback silently without breaking caller
     }
   }
 
-  async makeFetchRequest(url, method, api, jwtToken, body) {
+  async makeFetchRequest(url, method, api, jwtToken, body, clientName = null) {
     for (let i = 0; i <= this.retryCount; i++) {
       try {
-        const requestOptions = {
-          method,
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-            "X-UserType": "USER",
-            "X-SourceID": "WEB",
-            "X-ClientLocalIP": this.privateIp,
-            "X-ClientPublicIP": this.publicIp,
-            "X-MACAddress": this.macAddress,
-            "X-PrivateKey": api,
-            Authorization: `Bearer ${jwtToken}`,
-          },
+        const headers = {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "X-UserType": "USER",
+          "X-SourceID": "WEB",
+          "X-ClientLocalIP": this.privateIp,
+          "X-ClientPublicIP": this.publicIp || "103.248.75.23",
+          "X-MACAddress": this.macAddress,
+          "X-PrivateKey": api,
         };
 
-        if (method !== "GET" && method !== "HEAD") {
+        if (jwtToken) {
+          headers["Authorization"] = `Bearer ${jwtToken}`;
+        }
+
+        const requestOptions = {
+          method,
+          url,
+          headers,
+          httpsAgent: this.httpsAgent,
+          timeout: 10000,
+        };
+
+        if (method !== "GET" && method !== "HEAD" && body !== null && body !== undefined) {
           requestOptions.data = JSON.stringify(body);
         }
 
-        const response = await axios.request({
-          url,
-          ...requestOptions,
-        });
-
+        const response = await axios.request(requestOptions);
         return response.data;
       } catch (error) {
-        if ((i = this.retryCount)) {
-          return { error };
+        if (i >= this.retryCount) {
+          throw error;
         }
-        console.error(`Error: ${error.message}`);
-        if (error.code === "ECONNRESET" && i < this.retryCount - 1) {
-          console.log(`Retrying request (${i + 1}/${this.retryCount})...`);
-          const delay = 1;
-          await new Promise((resolve) => setTimeout(resolve, delay));
-        } else {
-          console.log(`Retrying request (${i + 1}/${this.retryCount})...`);
-          const delay = 2000;
-          await new Promise((resolve) => setTimeout(resolve, delay));
-        }
+        const delay = (i + 1) * 1000;
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
   }
 
-  async createSession(api, username, mpin, totp_token) {
+  async createSession(api, username, mpin, totp_token, clientName = null) {
     const { otp: totp } = TOTP.generate(totp_token);
 
-    const fetchWithRetry = async () => {
-      try {
-        const response = await this.makeFetchRequest(
-          "https://apiconnect.angelone.in/rest/auth/angelbroking/user/v1/loginByPassword",
-          "POST",
-          api,
-          null,
-          {
-            clientcode: username,
-            password: mpin,
-            totp,
-          },
-        );
-
-        if (response && response.data && response.data.jwtToken) {
-          return response.data.jwtToken;
-        }
-
-        // If the response does not contain the JWT token, throw an error to trigger retry
-        throw new Error("JWT token not found in the response");
-      } catch (e) {
-        throw new Error("JWT token not found in the response");
-      }
-    };
-
     try {
-      return await fetchWithRetry(); // 3 retries with a 1-second delay
+      const response = await this.makeFetchRequest(
+        "https://apiconnect.angelone.in/rest/auth/angelbroking/user/v1/loginByPassword",
+        "POST",
+        api,
+        null,
+        {
+          clientcode: username,
+          password: mpin,
+          totp,
+        },
+        clientName,
+      );
+
+      if (response && response.data && response.data.jwtToken) {
+        return response.data.jwtToken;
+      }
+
+      const clientLabel = clientName ? `${clientName} (${username})` : username;
+      const apiMsg = response?.message ? `: ${response.message}` : "";
+      console.error(`[Login Failed] ${clientLabel} - Did not receive JWT token${apiMsg}`);
+      throw new Error(`Did not receive JWT token for ${clientLabel}`);
     } catch (error) {
-      console.error("Error creating session after retries:", error);
-      throw error;
+      const clientLabel = clientName ? `${clientName} (${username})` : username;
+      if (!error.message.startsWith("Did not receive JWT token")) {
+        console.error(`[Login Failed] ${clientLabel} - Did not receive JWT token (${error.message})`);
+      }
+      throw new Error(`Did not receive JWT token for ${clientLabel}`);
     }
   }
 
@@ -115,7 +148,9 @@ class SmarterApi {
       );
       return response;
     } catch (error) {
-      console.error(`Error making secure ${method} request to ${url}:`, error);
+      const errMsg = error?.response?.data?.message || error.message;
+      const endpoint = url.replace("https://apiconnect.angelone.in", "");
+      console.error(`[API Error] ${method} ${endpoint}: ${errMsg}`);
       throw error;
     }
   }
@@ -141,21 +176,43 @@ class SmarterApi {
   }
 
   async getHoldings(api, jwtToken) {
-    return await this.makeSecureRequest(
-      "https://apiconnect.angelone.in/rest/secure/angelbroking/portfolio/v1/getHolding",
-      "GET",
-      api,
-      jwtToken,
-    );
+    try {
+      const res = await this.makeSecureRequest(
+        "https://apiconnect.angelone.in/rest/secure/angelbroking/portfolio/v1/getAllHolding",
+        "GET",
+        api,
+        jwtToken,
+      );
+      if (res?.data?.holdings && Array.isArray(res.data.holdings)) {
+        return { ...res, data: res.data.holdings, totalholding: res.data.totalholding };
+      }
+      return res;
+    } catch (error) {
+      // Fallback to legacy getHolding endpoint if getAllHolding fails
+      try {
+        return await this.makeSecureRequest(
+          "https://apiconnect.angelone.in/rest/secure/angelbroking/portfolio/v1/getHolding",
+          "GET",
+          api,
+          jwtToken,
+        );
+      } catch (e) {
+        throw error;
+      }
+    }
   }
 
   async getAllHoldings(api, jwtToken) {
-    return await this.makeSecureRequest(
+    const res = await this.makeSecureRequest(
       "https://apiconnect.angelone.in/rest/secure/angelbroking/portfolio/v1/getAllHolding",
       "GET",
       api,
       jwtToken,
     );
+    if (res?.data?.holdings && Array.isArray(res.data.holdings)) {
+      return { ...res, data: res.data.holdings, totalholding: res.data.totalholding };
+    }
+    return res;
   }
 
   async getPositions(api, jwtToken) {
