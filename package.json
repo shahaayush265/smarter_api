@@ -1,6 +1,6 @@
 {
   "name": "smarter_api",
-  "version": "11.0.2",
+  "version": "11.0.3",
   "description": "High-performance, resilient Node.js SDK wrapper for the Angel One SmartAPI trading platform featuring automated TOTP generation, connection pooling, and auto IP detection.",
   "main": "index.js",
   "keywords": [
